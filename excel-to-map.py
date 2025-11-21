@@ -11,7 +11,7 @@ import folium
 # ========= CONFIG =========
 CSV_PATH = "IOS_Tenant_Targets.csv"
 OUTPUT_CSV_WITH_COORDS = "IOS_Tenant_Targets_Wth_Coords.csv"
-OUTPUT_MAP_HTML = "IOS_Tenant_Map.html"
+OUTPUT_MAP_HTML = "index.html"
 # ==========================
 
 
