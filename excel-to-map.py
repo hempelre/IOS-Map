@@ -9,23 +9,47 @@ from geopy.exc import GeocoderUnavailable, GeocoderTimedOut
 import folium
 
 # ========= CONFIG =========
-CSV_PATH = "IOS_Tenant_Targets.csv"
-OUTPUT_CSV_WITH_COORDS = "IOS_Tenant_Targets_Wth_Coords.csv"
+# Point these at your cleaned files
+CSV_PATH = "IOS_Tenant_Targets_cleaned.csv"
+OUTPUT_CSV_WITH_COORDS = "IOS_Tenant_Targets_Wth_Coords_cleaned.csv"
 OUTPUT_MAP_HTML = "index.html"
 # ==========================
 
 
 def fix_encoding(s: str):
     """
-    Fix common mojibake like USâ19, Leeâs, OFallon, etc.
-    Tries latin1->utf8 roundtrip; if it fails, returns the original.
+    Fix common mojibake and normalize punctuation for geocoding.
+    Handles things like:
+      - USÃ¢ÂÂ19  -> US-19
+      - LeeÃ¢ÂÂs  -> Lee's
     """
     if not isinstance(s, str):
         return s
+
+    # First attempt: latin1 -> utf8 roundtrip (your original approach)
     try:
-        return s.encode("latin1").decode("utf8")
+        s2 = s.encode("latin1").decode("utf8")
+        s = s2
     except Exception:
-        return s
+        pass
+
+    # Then normalize common mojibake sequences that often survive the roundtrip
+    replacements = {
+        "Ã¢ÂÂ": "-",   # broken non-breaking hyphen
+        "â": "-",     # another broken hyphen form
+        "-": "-",       # real non-breaking hyphen (U+2011)
+        "–": "-",       # en dash
+        "—": "-",       # em dash
+        "Ã¢ÂÂ": "'",   # broken apostrophe
+        "â": "'",     # broken apostrophe form
+        "’": "'",       # smart apostrophe
+    }
+    for bad, good in replacements.items():
+        s = s.replace(bad, good)
+
+    # Collapse weird whitespace
+    s = " ".join(s.split())
+    return s
 
 
 def strip_suite(addr: str) -> str:
@@ -71,23 +95,17 @@ def load_and_clean(csv_path: str) -> pd.DataFrame:
         df.columns = df.iloc[0]
         df = df[1:].reset_index(drop=True)
 
-    # Standardize column names
-    expected_cols = [
-        "Tenant", "Location", "Address", "City", "State",
-        "Ownership", "Contact", "Phone", "Email", "Notes"
-    ]
+    # Required columns for the cleaned CSVs
+    EXPECTED_COLS = ["Tenant", "Location", "Address", "City", "State"]
+    missing = [c for c in EXPECTED_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
 
-    if len(df.columns) >= len(expected_cols):
-        df = df.iloc[:, :len(expected_cols)]
-        df.columns = expected_cols
-    else:
-        raise ValueError(
-            f"Unexpected number of columns ({len(df.columns)}). "
-            f"Found: {df.columns.tolist()}"
-        )
+    # Keep only required columns (order-independent)
+    df = df[EXPECTED_COLS].copy()
 
     # Basic cleanup + encoding fix on key fields
-    for col in ["Tenant", "Location", "Address", "City", "State"]:
+    for col in EXPECTED_COLS:
         df[col] = df[col].astype(str).str.strip().apply(fix_encoding)
 
     # Build a CLEAN address string just for geocoding
@@ -111,7 +129,7 @@ def geocode_addresses(
     Geocode all addresses in df["full_address"].
     existing_cache: dict[full_address] -> (lat, lon)
     """
-    geolocator = Nominatim(user_agent="ios_tenant_mapper", timeout=5)
+    geolocator = Nominatim(user_agent="ios_tenant_mapper", timeout=15)
 
     geocode = RateLimiter(
         geolocator.geocode,
@@ -209,14 +227,8 @@ def build_map(df: pd.DataFrame, output_html: str):
         for _, row in tenant_df.iterrows():
             popup_lines = [
                 f"<b>Tenant:</b> {row['Tenant']}",
-                # Use original Address for display, not the stripped one
                 f"<b>Address:</b> {row['Address']}, {row['City']}, {row['State']}",
             ]
-
-            if pd.notna(row.get("Phone", None)) and str(row["Phone"]).strip():
-                popup_lines.append(f"<b>Phone:</b> {row['Phone']}")
-            if pd.notna(row.get("Contact", None)) and str(row["Contact"]).strip():
-                popup_lines.append(f"<b>Contact:</b> {row['Contact']}")
 
             popup_html = "<br>".join(popup_lines)
 
@@ -236,7 +248,7 @@ def build_map(df: pd.DataFrame, output_html: str):
 
 
 def main():
-    # Always load the latest raw CSV
+    # Always load the latest cleaned CSV
     df = load_and_clean(CSV_PATH)
 
     # Build a cache from any existing geocoded CSV to avoid re-hitting the API
@@ -265,4 +277,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 
